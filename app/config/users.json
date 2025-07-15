@@ -1,0 +1,53 @@
+{
+  "users": [
+    {
+      "id": "user1",
+      "name": "iinfotech966",
+      "username": "iinfotech966@gmail.com",
+      "password": "Khodal@111",
+      "request_key": "machine1",
+      "enabled": true,
+      "capture_interval": 20,
+      "max_captures": 2000
+    },
+    {
+      "id": "user2", 
+      "name": "bazaarmain1",
+      "username": "bazaarmain1@gmail.com",
+      "password": "Khodalmaa@111",
+      "request_key": "machine2",
+      "enabled": false,
+      "capture_interval": 20,
+      "max_captures": 2000
+    },
+    {
+      "id": "user3",
+      "name": "User 3", 
+      "username": "khodalmaa0409@gmail.com",
+      "password": "Khodiyar@111",
+      "request_key": "machine3",
+      "enabled": false,
+      "capture_interval": 20,
+      "max_captures": 2000
+    }
+  ],
+  "dashboard": {
+    "login_url": "https://dashboard.spyrix.com/login",
+    "live_view_url": "https://dashboard.spyrix.com/live/",
+    "selectors": {
+      "username": "input[type=\"email\"], input[name=\"username\"]",
+      "password": "input[type=\"password\"]",
+      "login_button": "button[type=\"submit\"]",
+      "canvas": "#canvas"
+    }
+  },
+  "websocket": {
+    "endpoint": "ws://localhost:8765",
+    "timeout": 10
+  },
+  "ocr": {
+    "engine": "google_vision",
+    "save_images": true,
+    "images_dir": "images"
+  }
+} 
