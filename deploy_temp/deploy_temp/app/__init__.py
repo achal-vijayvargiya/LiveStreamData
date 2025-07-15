@@ -1,6 +1,0 @@
-"""
-LiveStreamData - Multi-User Dashboard OCR System
-"""
-
-__version__ = "1.0.0"
-__author__ = "Achal Vijayvargiya" 

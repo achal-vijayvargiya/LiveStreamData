@@ -1,3 +1,2 @@
-2025/07/15-00:13:54.104 3878 Reusing MANIFEST D:\code\LiveStreamData\user_data\user_0\Default\Site Characteristics Database/MANIFEST-000001
-2025/07/15-00:13:54.117 3878 Recovering log #3
-2025/07/15-00:13:54.117 3878 Reusing old log D:\code\LiveStreamData\user_data\user_0\Default\Site Characteristics Database/000003.log 
+2025/07/15-15:37:24.000 5a64 Creating DB D:\code\LiveStreamData\user_data\user_0\Default\Site Characteristics Database since it was missing.
+2025/07/15-15:37:24.019 5a64 Reusing MANIFEST D:\code\LiveStreamData\user_data\user_0\Default\Site Characteristics Database/MANIFEST-000001

@@ -1,3 +1,2 @@
-2025/07/15-00:13:54.530 3878 Reusing MANIFEST D:\code\LiveStreamData\user_data\user_0\Default\shared_proto_db\metadata/MANIFEST-000001
-2025/07/15-00:13:54.553 3878 Recovering log #3
-2025/07/15-00:13:54.554 3878 Reusing old log D:\code\LiveStreamData\user_data\user_0\Default\shared_proto_db\metadata/000003.log 
+2025/07/15-15:37:24.554 5a64 Creating DB D:\code\LiveStreamData\user_data\user_0\Default\shared_proto_db\metadata since it was missing.
+2025/07/15-15:37:24.565 5a64 Reusing MANIFEST D:\code\LiveStreamData\user_data\user_0\Default\shared_proto_db\metadata/MANIFEST-000001

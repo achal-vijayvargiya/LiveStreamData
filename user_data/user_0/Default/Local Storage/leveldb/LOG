@@ -1,3 +1,2 @@
-2025/07/15-00:13:54.303 62a0 Reusing MANIFEST D:\code\LiveStreamData\user_data\user_0\Default\Local Storage\leveldb/MANIFEST-000001
-2025/07/15-00:13:54.345 62a0 Recovering log #3
-2025/07/15-00:13:54.349 62a0 Reusing old log D:\code\LiveStreamData\user_data\user_0\Default\Local Storage\leveldb/000003.log 
+2025/07/15-15:37:24.026 5c08 Creating DB D:\code\LiveStreamData\user_data\user_0\Default\Local Storage\leveldb since it was missing.
+2025/07/15-15:37:24.064 5c08 Reusing MANIFEST D:\code\LiveStreamData\user_data\user_0\Default\Local Storage\leveldb/MANIFEST-000001
