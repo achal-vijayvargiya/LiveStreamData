@@ -60,12 +60,17 @@ async def health_check(request):
 async def cleanup():
     """Cleanup function to close all connections"""
     logger.info("🧹 Running cleanup tasks...")
+    
+    # Close WebSocket server
     for task in cleanup_tasks:
         try:
-            task.cancel()
-            await task
+            if hasattr(task, 'close'):
+                await task.close()
+            elif hasattr(task, 'cancel'):
+                task.cancel()
+                await task
         except Exception as e:
-            logger.error(f"Error during cleanup: {e}")
+            logger.debug(f"Cleanup task completed: {e}")
     
     # Close all client connections
     close_tasks = [client.close() for client in clients]
@@ -84,7 +89,7 @@ async def start_http_server(host, port, app):
             site = web.TCPSite(runner, host, port)
             await site.start()
             logger.info(f"✅ HTTP server running on http://{host}:{port}")
-            cleanup_tasks.append(runner.cleanup())
+            cleanup_tasks.append(runner)
             return True
         except OSError as e:
             retries -= 1
@@ -100,18 +105,19 @@ async def start_websocket_server(host, port):
     retries = 3
     while retries > 0:
         try:
-            ws_server = await serve(handle_client, host, port)
+            # Create the server but don't await it yet
+            ws_server = serve(handle_client, host, port)
             logger.info(f"✅ WebSocket server running on ws://{host}:{port}")
-            cleanup_tasks.append(ws_server.close())
-            return True
+            cleanup_tasks.append(ws_server)
+            return ws_server  # Return the server object
         except OSError as e:
             retries -= 1
             if retries == 0:
                 logger.error(f"❌ Failed to start WebSocket server after all retries: {e}")
-                return False
+                return None
             logger.warning(f"⚠️ Failed to bind WebSocket port {port}, trying again... ({retries} retries left)")
             await asyncio.sleep(1)
-    return False
+    return None
 
 async def main():
     """Main entry point"""
@@ -130,12 +136,13 @@ async def main():
         return
     
     # Start WebSocket server
-    if not await start_websocket_server(host, ws_port):
+    ws_server = await start_websocket_server(host, ws_port)
+    if not ws_server:
         return
     
     try:
-        # Run forever
-        await asyncio.Future()
+        # Run the WebSocket server forever
+        await ws_server
     finally:
         await cleanup()
 

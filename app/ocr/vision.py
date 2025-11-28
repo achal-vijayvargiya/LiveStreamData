@@ -71,3 +71,36 @@ def extract_kv_from_response(response):
 
     return kv_pairs
 
+def main():
+    """
+    Test the extract_text_from_image function with a default image.
+    You can change 'test_image.png' to the path of your test image.
+    """
+    import sys
+    import os
+
+    # Default image path (change as needed)
+    default_image_path = "test_image.png"
+
+    # Allow user to specify image path as command line argument
+    if len(sys.argv) > 1:
+        image_path = sys.argv[1]
+    else:
+        image_path = default_image_path
+
+    if not os.path.exists(image_path):
+        print(f"Image file '{image_path}' not found.")
+        return
+
+    print(f"Extracting text from image: {image_path}")
+    try:
+        text = extract_text_from_image(image_path)
+        print("Extracted text:")
+        print(text)
+    except Exception as e:
+        print(f"Error extracting text: {e}")
+
+if __name__ == "__main__":
+    main()
+
+

@@ -18,6 +18,63 @@ try:
 except:
     HARDCODED_NUM1 = {}
 
+# Global variable to store previous call data
+_previous_call_data = {}
+
+def validate_and_replace_zeros(current_data):
+    """
+    Validates current data and replaces zero values with previous call values.
+    If any value in any column is zero, it gets replaced by the previous call value of that column.
+    
+    Args:
+        current_data (dict): Current call data with format {"column": ["key -> value", ...]}
+    
+    Returns:
+        dict: Validated data with zero values replaced by previous values
+    """
+    global _previous_call_data
+    validated_data = {}
+    
+    for column, values in current_data.items():
+        validated_values = []
+        
+        for i, value_str in enumerate(values):
+            # Parse the value string (e.g., "126 -> 0")
+            if " -> " in value_str:
+                key, value = value_str.split(" -> ")
+                current_value = int(value)
+                
+                # If current value is 0 and we have previous data for this column and position
+                if current_value == 0 and column in _previous_call_data and i < len(_previous_call_data[column]):
+                    # Get the previous value for this position
+                    prev_value_str = _previous_call_data[column][i]
+                    if " -> " in prev_value_str:
+                        _, prev_value = prev_value_str.split(" -> ")
+                        # Replace with previous value
+                        validated_values.append(f"{key} -> {prev_value}")
+                        logger.info(f"🔄 Replaced zero value in column {column}, position {i}: {value_str} -> {key} -> {prev_value}")
+                    else:
+                        validated_values.append(value_str)
+                else:
+                    validated_values.append(value_str)
+            else:
+                validated_values.append(value_str)
+        
+        validated_data[column] = validated_values
+    
+    return validated_data
+
+def update_previous_call_data(current_data):
+    """
+    Updates the previous call data with current data after validation.
+    
+    Args:
+        current_data (dict): Current validated data to store as previous
+    """
+    global _previous_call_data
+    _previous_call_data = current_data.copy()
+    logger.info("💾 Updated previous call data")
+
 # WebSocket endpoint - can be local or ngrok
 NGROK_ENDPOINT = "ws://1.tcp.in.ngrok.io:20306"
 # "ws://localhost:8765"  # Default to local server
@@ -38,9 +95,17 @@ async def post_data(detected, image_path=None, user_info=None):
                 rv = 0
             arr.append(f"{ik:03} -> {rv}")
             output[str(col)] = arr
-    print("request: \n")
-    print(json.dumps(output, indent=2), flush=True)
-    await _send_ws(output,"machine1")
+    # Apply validation to replace zero values with previous call values
+    validated_output = validate_and_replace_zeros(output)
+    
+    print("request (after validation): \n")
+    print(json.dumps(validated_output, indent=2), flush=True)
+    
+    # Send validated data
+    await _send_ws(validated_output,"machine1")
+    
+    # Update previous call data with current validated data
+    update_previous_call_data(validated_output)
 
 async def _send_ws(data,request_key:str):
     try:

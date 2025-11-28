@@ -267,7 +267,24 @@ async def capture_canvas_screenshot(page, save_path="canvas_capture.png"):
     images_dir = "images"
     if not os.path.exists(images_dir):
         os.makedirs(images_dir)
+    
+    # Variables for stuck detection
+    consecutive_failures = 0
+    max_consecutive_failures = 5  # Refresh after 5 consecutive failures
+    consecutive_zero_data = 0
+    max_consecutive_zero_data = 2  # Refresh after 2 consecutive zero-data captures
+    last_successful_capture = datetime.datetime.now()
+    last_valid_data_capture = datetime.datetime.now()
+    refresh_interval = 180  # Refresh every 3 minutes (180 seconds) as preventive measure (reduced from 5 min)
+    last_ocr_result = None
+    
     for i in range(2000):
+        # Multi-layered stuck detection system:
+        # 1. Capture failure detection (consecutive_failures)
+        # 2. Zero/empty data detection (consecutive_zero_data)
+        # 3. Time-based refresh (refresh_interval)
+        # 4. Valid data timeout (120 seconds)
+        
         # Get the canvas as a data URL (native resolution) with better error handling
         canvas_data_url = await page.evaluate("""
             () => {
@@ -306,6 +323,10 @@ async def capture_canvas_screenshot(page, save_path="canvas_capture.png"):
         """)
         
         if canvas_data_url:
+            # Successful capture - reset failure counter
+            consecutive_failures = 0
+            last_successful_capture = datetime.datetime.now()
+            
             base64_data = canvas_data_url.split(',')[1]
             image_data = base64.b64decode(base64_data)
             image = Image.open(BytesIO(image_data))
@@ -313,10 +334,118 @@ async def capture_canvas_screenshot(page, save_path="canvas_capture.png"):
             unique_save_path = os.path.join(images_dir, f"canvas_capture_{timestamp}.png")
             image.save(unique_save_path)
             text = ocr_image_google_vision(unique_save_path)
+            
+            # Check if OCR result is empty or all zeros (indicates stale/blank canvas)
+            is_zero_data = False
+            if not text or len(text) == 0:
+                is_zero_data = True
+                print(f"[WARNING] OCR returned empty data - canvas may be blank/stale")
+            elif all(v == 0 for v in text.values()) and len(text) > 0:
+                is_zero_data = True
+                print(f"[WARNING] OCR returned all zero values - canvas may be stale")
+            
+            # Check if OCR result is identical to previous (canvas not updating)
+            is_stale_data = False
+            if last_ocr_result is not None and text == last_ocr_result:
+                is_stale_data = True
+                print(f"[WARNING] OCR result identical to previous capture - canvas may not be updating")
+            
+            last_ocr_result = text.copy() if text else {}
+            
+            # Handle zero/stale data detection
+            if is_zero_data:
+                consecutive_zero_data += 1
+                print(f"[WARNING] Zero/empty data detected (consecutive count: {consecutive_zero_data})")
+                
+                if consecutive_zero_data >= max_consecutive_zero_data:
+                    refresh_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    print(f"\n{'🔴'*35}")
+                    print(f"[CRITICAL] {refresh_time} - {consecutive_zero_data} consecutive zero-data captures!")
+                    print(f"[CRITICAL] Canvas is stuck. Forcing EMERGENCY REFRESH...")
+                    print(f"{'🔴'*35}\n")
+                    await page.reload()
+                    await page.wait_for_load_state('networkidle')
+                    await page.wait_for_timeout(10000)  # Wait for canvas to load after refresh
+                    consecutive_zero_data = 0
+                    last_ocr_result = None
+                    print(f"[+] {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - Emergency refresh completed due to zero data, continuing capture...\n")
+                    continue
+            else:
+                consecutive_zero_data = 0
+                last_valid_data_capture = datetime.datetime.now()
+            
             await post_data(text, unique_save_path)
         
-            # print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] OCR text: {text}")
+            print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ✅ Capture #{i+1} successful | Keys extracted: {len(text)}")
+            
+            # Periodic status report every 10 captures
+            if (i + 1) % 10 == 0:
+                print(f"\n{'='*70}")
+                print(f"📊 STATUS REPORT - Capture #{i+1}")
+                print(f"{'='*70}")
+                print(f"⏰ Time since last valid data: {(datetime.datetime.now() - last_valid_data_capture).total_seconds():.1f}s")
+                print(f"🔄 Consecutive zero data: {consecutive_zero_data}")
+                print(f"❌ Consecutive failures: {consecutive_failures}")
+                print(f"📈 Last OCR keys: {len(last_ocr_result) if last_ocr_result else 0}")
+                print(f"{'='*70}\n")
+            
             await asyncio.sleep(20)
         else:
-            print(await page.content())  # Debug: print HTML if not found
-            raise Exception("Canvas element with id 'canvas' not found or could not get data URL.")
+            # Failed capture - increment failure counter
+            consecutive_failures += 1
+            print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ❌ Capture #{i+1} failed (consecutive failures: {consecutive_failures})")
+            
+            # Check if we need to refresh due to consecutive failures
+            if consecutive_failures >= max_consecutive_failures:
+                refresh_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                print(f"\n{'🟡'*35}")
+                print(f"[WARNING] {refresh_time} - {consecutive_failures} consecutive failures detected.")
+                print(f"[WARNING] Page may be stuck. Refreshing...")
+                print(f"{'🟡'*35}\n")
+                await page.reload()
+                await page.wait_for_load_state('networkidle')
+                await page.wait_for_timeout(10000)  # Wait for canvas to load after refresh
+                consecutive_failures = 0  # Reset counter after refresh
+                print(f"[+] {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - Failure-based refresh completed, continuing capture...\n")
+                continue
+            
+            # Check if we need preventive refresh (time-based)
+            time_since_last_success = (datetime.datetime.now() - last_successful_capture).total_seconds()
+            time_since_last_valid_data = (datetime.datetime.now() - last_valid_data_capture).total_seconds()
+            
+            if time_since_last_success > refresh_interval:
+                refresh_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                print(f"\n{'🔵'*35}")
+                print(f"[INFO] {refresh_time} - No successful capture for {time_since_last_success:.0f} seconds.")
+                print(f"[INFO] Preventive refresh (every {refresh_interval}s)...")
+                print(f"{'🔵'*35}\n")
+                await page.reload()
+                await page.wait_for_load_state('networkidle')
+                await page.wait_for_timeout(10000)  # Wait for canvas to load after refresh
+                last_successful_capture = datetime.datetime.now()
+                last_valid_data_capture = datetime.datetime.now()
+                consecutive_zero_data = 0
+                last_ocr_result = None
+                print(f"[+] {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - Preventive refresh completed, continuing capture...\n")
+                continue
+            
+            # Additional check: refresh if no valid data for extended period (even if captures succeed)
+            if time_since_last_valid_data > 120:  # 2 minutes without valid data
+                refresh_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                print(f"\n{'🟠'*35}")
+                print(f"[WARNING] {refresh_time} - No valid data for {time_since_last_valid_data:.0f} seconds")
+                print(f"[WARNING] Despite successful captures, canvas appears stuck. Refreshing...")
+                print(f"{'🟠'*35}\n")
+                await page.reload()
+                await page.wait_for_load_state('networkidle')
+                await page.wait_for_timeout(10000)  # Wait for canvas to load after refresh
+                last_successful_capture = datetime.datetime.now()
+                last_valid_data_capture = datetime.datetime.now()
+                consecutive_zero_data = 0
+                last_ocr_result = None
+                print(f"[+] {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - Data-timeout refresh completed, continuing capture...\n")
+                continue
+            
+            # If not too many failures, just wait and try again
+            print("[INFO] Waiting before next attempt...")
+            await asyncio.sleep(10)
