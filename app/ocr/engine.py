@@ -35,5 +35,16 @@ def ocr_image_google_vision(image_path: str) -> str:
     # client = setup_vision_client()
     text = extract_text_from_image(image_path)
     return text
+
+def ocr_image_google_vision_table(image_path: str) -> dict:
+    """
+    Perform OCR on an image using Google Cloud Vision API and extract table data.
+    Specifically extracts the "Sub Total" row from the table.
+    
+    Returns:
+        Dictionary mapping column numbers (1-10) to their Sub Total values
+    """
+    from .table_extractor import extract_table_data
+    return extract_table_data(image_path)
         
 

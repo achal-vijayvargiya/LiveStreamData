@@ -13,15 +13,94 @@ def setup_vision_client():
     return vision.ImageAnnotatorClient()
 
 def extract_text_from_image(image_path):
+    from PIL import Image as PILImage
+    import io
+    
     client = setup_vision_client()
 
-    with open(image_path, "rb") as img_file:
-        content = img_file.read()
+    # Use same preprocessing as get_full_ocr_response for consistency
+    pil_image = PILImage.open(image_path)
+    if pil_image.mode != 'RGB':
+        pil_image = pil_image.convert('RGB')
+    
+    # Save to bytes with PNG format (lossless) to preserve quality
+    img_byte_arr = io.BytesIO()
+    pil_image.save(img_byte_arr, format='PNG', optimize=False)
+    img_byte_arr.seek(0)
+    content = img_byte_arr.read()
 
     image = vision.Image(content=content)
     response = client.document_text_detection(image=image)
     return extract_kv_from_response(response)    
     # return response.full_text_annotation.text
+
+def get_full_ocr_response(image_path):
+    """
+    Get the full OCR response with layout information for table parsing.
+    Returns the raw Google Vision API response object.
+    """
+    from PIL import Image as PILImage
+    import io
+    
+    client = setup_vision_client()
+
+    # Preprocess image to ensure good quality for OCR
+    # Read and optimize the image before sending to OCR
+    pil_image = PILImage.open(image_path)
+    
+    # Convert to RGB if necessary (in case of RGBA or other modes)
+    if pil_image.mode != 'RGB':
+        pil_image = pil_image.convert('RGB')
+    
+    # Get image dimensions for debugging
+    width, height = pil_image.size
+    print(f"[OCR] Processing image: {width}x{height} pixels")
+    
+    # Enhance image quality for better OCR
+    # Save to bytes with high quality
+    img_byte_arr = io.BytesIO()
+    # Use PNG format for lossless compression, or high-quality JPEG
+    pil_image.save(img_byte_arr, format='PNG', optimize=False)
+    img_byte_arr.seek(0)
+    content = img_byte_arr.read()
+    
+    print(f"[OCR] Image size: {len(content)} bytes")
+    
+    # Create image object with content
+    image = vision.Image(content=content)
+    
+    # Use document_text_detection for better table/layout detection
+    # This is better than text_detection for structured documents
+    response = client.document_text_detection(
+        image=image,
+        image_context={
+            # Enable language hints if needed
+            # 'language_hints': ['en']
+        }
+    )
+    
+    # Check for errors in response
+    if hasattr(response, 'error') and response.error.message:
+        print(f"[OCR ERROR] {response.error.message}")
+    
+    # Log OCR results summary for debugging
+    if hasattr(response, 'full_text_annotation') and response.full_text_annotation:
+        text_length = len(response.full_text_annotation.text) if response.full_text_annotation.text else 0
+        pages_count = len(response.full_text_annotation.pages) if response.full_text_annotation.pages else 0
+        blocks_count = sum(len(page.blocks) for page in response.full_text_annotation.pages) if response.full_text_annotation.pages else 0
+        
+        print(f"[OCR DEBUG] OCR Results: {text_length} chars, {pages_count} page(s), {blocks_count} block(s)")
+        
+        # Check page dimensions from OCR response
+        if response.full_text_annotation.pages:
+            for i, page in enumerate(response.full_text_annotation.pages):
+                if hasattr(page, 'width') and hasattr(page, 'height'):
+                    print(f"[OCR DEBUG] Page {i+1} dimensions from OCR: {page.width}x{page.height}")
+                    # Compare with actual image dimensions
+                    if page.width != width or page.height != height:
+                        print(f"[OCR WARNING] OCR page dimensions ({page.width}x{page.height}) don't match image ({width}x{height})")
+    
+    return response
 
 
 

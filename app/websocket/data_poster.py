@@ -4,6 +4,7 @@ import asyncio
 import logging
 from websockets.exceptions import ConnectionClosed, InvalidURI
 import os
+import httpx
 
 # Configure logging
 logging.basicConfig(
@@ -76,7 +77,7 @@ def update_previous_call_data(current_data):
     logger.info("💾 Updated previous call data")
 
 # WebSocket endpoint - can be local or ngrok
-NGROK_ENDPOINT = "ws://1.tcp.in.ngrok.io:20306"
+NGROK_ENDPOINT = "ws://1.tcp.in.ngrok.io:20369"
 # "ws://localhost:8765"  # Default to local server
 # For ngrok: "ws://1.tcp.in.ngrok.io:20306"
 
@@ -103,9 +104,51 @@ async def post_data(detected, image_path=None, user_info=None):
     
     # Send validated data
     await _send_ws(validated_output,"machine1")
-    
+    # Call the send_post function with validated_output
+    await send_post(None, validated_output)
     # Update previous call data with current validated data
     update_previous_call_data(validated_output)
+
+async def send_post(self, data):
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                response = await client.post(
+                    "https://be.khodalmaa.in/api/v1/project2_data",
+                    data=json.dumps({"machine1": data}),
+                    headers={"Content-Type": "application/json"}
+                )
+                print("Status:", response.status_code)
+                print("Response:", response.text)
+        except httpx.RequestError as e:
+            print(f"Request failed: {e}")
+        except httpx.HTTPStatusError as e:
+            print(f"HTTP error: {e.response.status_code} - {e.response.text}")
+
+async def post_table_data(table_data, image_path=None, user_info=None, request_key="machine1"):
+    """
+    Post table data extracted from Sub Total row.
+    
+    Args:
+        table_data: Dictionary mapping column numbers (1-10) to their Sub Total values
+        image_path: Optional image path for logging
+        user_info: Optional user information
+        request_key: WebSocket request key (default: "machine1")
+    """
+    if image_path is not None:
+        print(f"image_path: {image_path}")
+    
+    # Format: List of 10 numbers [value1, value2, ..., value10] for columns 1-10
+    # Ensure proper ordering by explicitly iterating columns 1-10 in ascending order
+    output = []
+    for col_num in sorted(range(1, 11)):  # Columns 1-10 in order (sorted to ensure order)
+        value = table_data.get(col_num, 0)
+        output.append(value)
+    
+    print("request: \n")
+    print(json.dumps(output, indent=2), flush=True)
+    
+    # Send data directly (no zero replacement)
+    await _send_ws(output, request_key)
 
 async def _send_ws(data,request_key:str):
     try:

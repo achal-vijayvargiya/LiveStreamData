@@ -3,8 +3,8 @@ from playwright.async_api import async_playwright
 import os
 from PIL import Image
 import io
-from ..ocr.engine import ocr_image_google_vision
-from ..websocket.data_poster import post_data
+from ..ocr.engine import ocr_image_google_vision, ocr_image_google_vision_table
+from ..websocket.data_poster import post_data, post_table_data
 import datetime
 import base64
 from PIL import Image
@@ -75,7 +75,8 @@ async def watch_image_src():
     async with async_playwright() as p:
         # Launch browser in visible mode (not headless) for debugging
         browser = await p.chromium.launch(headless=True)  # 1 second delay between actions
-        page = await browser.new_page()
+        # Set a large viewport to ensure full canvas is visible
+        page = await browser.new_page(viewport={'width': 1920, 'height': 1080})
         
         # Set longer timeouts for page loading
         page.set_default_timeout(30000)  # 30 seconds timeout
@@ -123,6 +124,10 @@ async def capture_canvas_screenshot(page, save_path="canvas_capture.png"):
     # Get the current URL (whatever it changed to)
     current_url = page.url
     print(f"[+] Current URL after initial load: {current_url}")
+    
+    # Ensure viewport is large enough to see full canvas
+    await page.set_viewport_size({'width': 1920, 'height': 1080})
+    await page.evaluate("window.scrollTo(0, 0)")
     
     # Wait a bit for any dynamic content to load
     print("[+] Waiting for dynamic content to load...")
@@ -286,6 +291,36 @@ async def capture_canvas_screenshot(page, save_path="canvas_capture.png"):
         # 4. Valid data timeout (120 seconds)
         
         # Get the canvas as a data URL (native resolution) with better error handling
+        # First, get canvas info and ensure it's fully visible
+        canvas_info = await page.evaluate("""
+            () => {
+                const canvas = document.getElementById('canvas');
+                if (!canvas) {
+                    return { exists: false };
+                }
+                
+                // Scroll canvas into view to ensure it's fully rendered
+                canvas.scrollIntoView({ behavior: 'instant', block: 'center' });
+                
+                return {
+                    exists: true,
+                    width: canvas.width,
+                    height: canvas.height,
+                    offsetWidth: canvas.offsetWidth,
+                    offsetHeight: canvas.offsetHeight,
+                    scrollWidth: canvas.scrollWidth,
+                    scrollHeight: canvas.scrollHeight,
+                    boundingRect: canvas.getBoundingClientRect()
+                };
+            }
+        """)
+        
+        if canvas_info and canvas_info.get('exists'):
+            print(f"[DEBUG] Canvas dimensions: {canvas_info.get('width')}x{canvas_info.get('height')} (display: {canvas_info.get('offsetWidth')}x{canvas_info.get('offsetHeight')})")
+        
+        # Wait a moment for scroll to complete
+        await page.wait_for_timeout(100)
+        
         canvas_data_url = await page.evaluate("""
             () => {
                 const canvas = document.getElementById('canvas');
@@ -313,10 +348,17 @@ async def capture_canvas_screenshot(page, save_path="canvas_capture.png"):
                         return null;
                     }
                     
-                    // Capture the full canvas
-                    return canvas.toDataURL('image/png');
+                    // Capture the full canvas - toDataURL should capture entire canvas regardless of viewport
+                    // But if there are size limits, we might need to check
+                    const dataUrl = canvas.toDataURL('image/png');
+                    
+                    // Log canvas dimensions for debugging
+                    console.log('Canvas captured:', canvas.width, 'x', canvas.height, 'DataURL length:', dataUrl.length);
+                    
+                    return dataUrl;
                 } catch (e) {
                     console.log('Error capturing canvas:', e);
+                    console.log('Error details:', e.message, e.stack);
                     return null;
                 }
             }
@@ -330,10 +372,21 @@ async def capture_canvas_screenshot(page, save_path="canvas_capture.png"):
             base64_data = canvas_data_url.split(',')[1]
             image_data = base64.b64decode(base64_data)
             image = Image.open(BytesIO(image_data))
+            
+            # Log image dimensions for debugging
+            print(f"[DEBUG] Captured image dimensions: {image.width}x{image.height}")
+            
+            # Verify image is not empty
+            if image.width == 0 or image.height == 0:
+                print("[WARNING] Captured image has zero dimensions!")
+                continue
+            
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             unique_save_path = os.path.join(images_dir, f"canvas_capture_{timestamp}.png")
             image.save(unique_save_path)
-            text = ocr_image_google_vision(unique_save_path)
+            print(f"[DEBUG] Image saved: {unique_save_path} ({image.width}x{image.height})")
+            # Use table extraction for new solution - extracts Sub Total row
+            text = ocr_image_google_vision_table(unique_save_path)
             
             # Check if OCR result is empty or all zeros (indicates stale/blank canvas)
             is_zero_data = False
@@ -374,9 +427,10 @@ async def capture_canvas_screenshot(page, save_path="canvas_capture.png"):
                 consecutive_zero_data = 0
                 last_valid_data_capture = datetime.datetime.now()
             
-            await post_data(text, unique_save_path)
+            # Use new table data posting function for Sub Total row extraction
+            await post_table_data(text, unique_save_path)
         
-            print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ✅ Capture #{i+1} successful | Keys extracted: {len(text)}")
+            print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ✅ Capture #{i+1} successful | Columns extracted: {len(text)}")
             
             # Periodic status report every 10 captures
             if (i + 1) % 10 == 0:
@@ -389,7 +443,7 @@ async def capture_canvas_screenshot(page, save_path="canvas_capture.png"):
                 print(f"📈 Last OCR keys: {len(last_ocr_result) if last_ocr_result else 0}")
                 print(f"{'='*70}\n")
             
-            await asyncio.sleep(20)
+            await asyncio.sleep(1)  # Capture every 1 second
         else:
             # Failed capture - increment failure counter
             consecutive_failures += 1
@@ -448,4 +502,4 @@ async def capture_canvas_screenshot(page, save_path="canvas_capture.png"):
             
             # If not too many failures, just wait and try again
             print("[INFO] Waiting before next attempt...")
-            await asyncio.sleep(10)
+            await asyncio.sleep(1)  # Retry after 1 second
