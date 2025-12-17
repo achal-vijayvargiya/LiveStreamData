@@ -74,7 +74,7 @@ async def login(page):
 async def watch_image_src():
     async with async_playwright() as p:
         # Launch browser in visible mode (not headless) for debugging
-        browser = await p.chromium.launch(headless=True)  # 1 second delay between actions
+        browser = await p.chromium.launch(headless=False)  # 1 second delay between actions
         # Set a large viewport to ensure full canvas is visible
         page = await browser.new_page(viewport={'width': 1920, 'height': 1080})
         
