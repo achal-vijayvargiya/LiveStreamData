@@ -2,8 +2,8 @@
   "users": [
     {
       "id": "user1",
-      "name": "iinfotech966",
-      "username": "iinfotech966@gmail.com",
+      "name": "Bazaarmain7",
+      "username": "Bazaarmain7@gmail.com",
       "password": "Khodal@111",
       "request_key": "machine1",
       "enabled": true,
@@ -13,13 +13,13 @@
    
   ],
   "dashboard": {
-    "login_url": "https://dashboard.spyrix.com/login",
-    "live_view_url": "https://dashboard.spyrix.com/live/",
+    "login_url": "https://account.clevguard.org/login",
+    "live_view_url": "https://panel.clevguard.org/monivisor-live-screen",
     "selectors": {
-      "username": "input[type=\"email\"], input[name=\"username\"]",
+      "username": "input[type=\"text\"][placeholder=\"Email Address\"]",
       "password": "input[type=\"password\"]",
-      "login_button": "button[type=\"submit\"]",
-      "canvas": "#canvas"
+      "login_button": "button.btn-login",
+      "canvas": ".pc-new-video-box"
     }
   },
   "websocket": {

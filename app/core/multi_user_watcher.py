@@ -13,8 +13,8 @@ from playwright.async_api import async_playwright
 from PIL import Image
 from io import BytesIO
 import base64
-from ..ocr.engine import ocr_image_google_vision
-from ..websocket.data_poster import post_data
+from ..ocr.engine import ocr_image_google_vision_table
+from ..websocket.data_poster import post_table_data
 
 # Configure logging
 logging.basicConfig(
@@ -80,16 +80,19 @@ class MultiUserWatcher:
             await page.goto(self.config['dashboard']['login_url'])
             await page.wait_for_load_state('networkidle')
             
-            # Fill username
-            await page.locator('input').nth(0).fill(user['username'])
+            # Fill username using config selector
+            username_selector = self.config['dashboard']['selectors']['username']
+            await page.locator(username_selector).fill(user['username'])
             logger.info(f"📝 Filled username for {user['username']}")
             
-            # Fill password
-            await page.locator('input').nth(1).fill(user['password'])
+            # Fill password using config selector
+            password_selector = self.config['dashboard']['selectors']['password']
+            await page.locator(password_selector).fill(user['password'])
             logger.info(f"🔒 Filled password for {user['username']}")
             
-            # Submit login
-            await page.get_by_role("button").press('Enter')
+            # Submit login using config selector
+            login_button_selector = self.config['dashboard']['selectors']['login_button']
+            await page.locator(login_button_selector).click()
             await page.wait_for_load_state('networkidle')
             
             # Check if login was successful
@@ -106,18 +109,19 @@ class MultiUserWatcher:
             return False
     
     async def wait_for_canvas_with_retry(self, page, max_retries=3, timeout=30000):
-        """Wait for canvas with retry logic"""
+        """Wait for canvas/video element with retry logic"""
+        canvas_selector = self.config['dashboard']['selectors']['canvas']
         for attempt in range(max_retries):
             try:
-                logger.info(f"Waiting for canvas (attempt {attempt + 1}/{max_retries})")
-                await page.wait_for_selector("#canvas", state="visible", timeout=timeout)
+                logger.info(f"Waiting for video element (attempt {attempt + 1}/{max_retries})")
+                await page.wait_for_selector(canvas_selector, state="visible", timeout=timeout)
                 return True
             except Exception as e:
                 if attempt < max_retries - 1:
-                    logger.warning(f"Canvas not found, retrying... ({e})")
+                    logger.warning(f"Video element not found, retrying... ({e})")
                     await asyncio.sleep(5)  # Wait before retry
                 else:
-                    logger.error(f"Canvas not found after {max_retries} attempts: {e}")
+                    logger.error(f"Video element not found after {max_retries} attempts: {e}")
                     return False
 
     async def capture_and_process(self, page, user):
@@ -144,20 +148,15 @@ class MultiUserWatcher:
             
             while capture_count < max_captures:
                 try:
-                    # Check if canvas exists before capturing
-                    canvas_data_url = await page.evaluate("""
-                     () => {
-                        const canvas = document.getElementById('canvas');
-                        return canvas ? canvas.toDataURL('image/png') : null;
-                    }
-                    """)
-
+                    # Wait for the video element to be visible
+                    canvas_selector = self.config['dashboard']['selectors']['canvas']
+                    element = page.locator(canvas_selector)
                     
-                    if canvas_data_url:
-                        # Decode base64 image
-                        base64_data = canvas_data_url.split(',')[1]
-                        image_data = base64.b64decode(base64_data)
-                        image = Image.open(BytesIO(image_data))
+                    # Check if element exists and is visible
+                    if await element.is_visible():
+                        # Take screenshot of the element
+                        screenshot_bytes = await element.screenshot(type='png')
+                        image = Image.open(BytesIO(screenshot_bytes))
                         
                         # Save with timestamp and user ID
                         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -165,11 +164,12 @@ class MultiUserWatcher:
                         save_path = os.path.join(user_images_dir, filename)
                         image.save(save_path)
                         
-                        # Perform OCR
-                        ocr_text = ocr_image_google_vision(save_path)
+                        # Perform OCR - extract table data (10 values from Sub Total row)
+                        table_data = ocr_image_google_vision_table(save_path)
                         
                         # Send to WebSocket
-                        await post_data(ocr_text, save_path, user_info=user)
+                        request_key = user.get('request_key', 'machine1')
+                        await post_table_data(table_data, save_path, user_info=user, request_key=request_key)
                         
                         capture_count += 1
                         logger.info(f"📊 {user['name']}: Capture #{capture_count}, OCR completed")
@@ -179,7 +179,7 @@ class MultiUserWatcher:
                             os.remove(save_path)
                             
                     else:
-                        logger.warning(f"⚠️ Canvas not found for {user['name']}")
+                        logger.warning(f"⚠️ Video element not visible for {user['name']}")
                         
                 except Exception as e:
                     logger.error(f"❌ Capture error for {user['name']}: {e}")
