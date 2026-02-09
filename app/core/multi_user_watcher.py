@@ -76,9 +76,9 @@ class MultiUserWatcher:
         try:
             logger.info(f"🔐 Logging in user: {user['name']} ({user['username']})")
             print(f"self.config['dashboard']['login_url']: {self.config['dashboard']['login_url']}")
-            # Navigate to login page
-            await page.goto(self.config['dashboard']['login_url'])
-            await page.wait_for_load_state('networkidle')
+            # Navigate to login page (no timeout limit for testing)
+            await page.goto(self.config['dashboard']['login_url'], wait_until='domcontentloaded', timeout=0)
+            await asyncio.sleep(3)  # Give time for page to load
             
             # Fill username using config selector
             username_selector = self.config['dashboard']['selectors']['username']
@@ -93,7 +93,7 @@ class MultiUserWatcher:
             # Submit login using config selector
             login_button_selector = self.config['dashboard']['selectors']['login_button']
             await page.locator(login_button_selector).click()
-            await page.wait_for_load_state('networkidle')
+            await asyncio.sleep(5)  # Wait for login to process
             
             # Check if login was successful
             # current_url = page.url
@@ -108,8 +108,8 @@ class MultiUserWatcher:
             logger.error(f"❌ Login error for {user['name']}: {e}")
             return False
     
-    async def wait_for_canvas_with_retry(self, page, max_retries=3, timeout=30000):
-        """Wait for canvas/video element with retry logic"""
+    async def wait_for_canvas_with_retry(self, page, max_retries=3, timeout=0):
+        """Wait for canvas/video element with retry logic (no timeout limit for testing)"""
         canvas_selector = self.config['dashboard']['selectors']['canvas']
         for attempt in range(max_retries):
             try:
@@ -119,9 +119,9 @@ class MultiUserWatcher:
             except Exception as e:
                 if attempt < max_retries - 1:
                     logger.warning(f"Video element not found, retrying... ({e})")
-                    await asyncio.sleep(5)  # Wait before retry
+                    await asyncio.sleep(10)  # Wait longer before retry
                 else:
-                    logger.error(f"Video element not found after {max_retries} attempts: {e}")
+                    logger.warning(f"Video element not visible after {max_retries} attempts: {e}, continuing anyway...")
                     return False
 
     async def capture_and_process(self, page, user):
@@ -129,11 +129,73 @@ class MultiUserWatcher:
         try:
             logger.info(f"📸 Starting capture process for {user['name']}")
             
-            # Navigate to live view with retry
-            await page.goto(self.config['dashboard']['live_view_url'])
-            await page.wait_for_load_state('networkidle')
-            await page.wait_for_selector(self.config['dashboard']['selectors']['canvas'], 
-                                       state="visible", timeout=10000)
+            # Navigate to live view with retry (no timeout limit for testing)
+            logger.info(f"🌐 Navigating to live view page (this may take time to load)...")
+            await page.goto(self.config['dashboard']['live_view_url'], wait_until='domcontentloaded', timeout=0)
+            logger.info("⏳ Waiting for page to fully load...")
+            
+            # Wait for play button to appear (this indicates page is fully loaded)
+            play_button_selector = self.config['dashboard']['selectors'].get('play_button', '.play-btn')
+            logger.info(f"⏳ Waiting for play button to appear: {play_button_selector}")
+            logger.info("   (Play button indicates the page has fully loaded)")
+            
+            max_wait_attempts = 12  # Wait up to 6 minutes (12 × 30 seconds)
+            play_button_found = False
+            
+            for attempt in range(max_wait_attempts):
+                play_button = page.locator(play_button_selector)
+                play_button_count = await play_button.count()
+                
+                if play_button_count > 0:
+                    is_visible = await play_button.first.is_visible()
+                    if is_visible:
+                        logger.info(f"✅ Play button found and visible! (attempt {attempt + 1}/{max_wait_attempts})")
+                        play_button_found = True
+                        break
+                    else:
+                        logger.info(f"⏳ Play button found but not visible yet... (attempt {attempt + 1}/{max_wait_attempts})")
+                else:
+                    logger.info(f"⏳ Play button not found yet... (attempt {attempt + 1}/{max_wait_attempts})")
+                
+                if attempt < max_wait_attempts - 1:
+                    logger.info(f"   Waiting 30 seconds before next check...")
+                    await asyncio.sleep(30)
+            
+            # Click play button if found
+            if play_button_found:
+                try:
+                    logger.info("🔘 Clicking play button...")
+                    await play_button.first.click()
+                    await asyncio.sleep(5)  # Wait for video/canvas to start
+                    logger.info("✅ Play button clicked, video should be starting")
+                except Exception as e:
+                    logger.error(f"❌ Error clicking play button: {e}")
+            else:
+                logger.warning("⚠️ Play button not found after all attempts, trying alternative selectors...")
+                # Try alternative selectors as fallback
+                alt_selectors = [
+                    'a.play-btn',
+                    '.pc-new-video-box .play-btn',
+                    'a[class*="play"]',
+                    '[aria-label*="click"]'
+                ]
+                for alt_sel in alt_selectors:
+                    try:
+                        alt_button = page.locator(alt_sel)
+                        alt_count = await alt_button.count()
+                        if alt_count > 0:
+                            logger.info(f"✅ Found play button with alternative selector: {alt_sel}")
+                            await alt_button.first.click()
+                            await asyncio.sleep(5)
+                            logger.info("✅ Play button clicked")
+                            break
+                    except:
+                        continue
+            
+            # Now wait for canvas element after play button is clicked
+            canvas_selector = self.config['dashboard']['selectors']['canvas']
+            logger.info(f"🔍 Waiting for canvas element: {canvas_selector}")
+            await asyncio.sleep(5)  # Give time for canvas to appear after play button click
 
             # Create user-specific images directory
             user_images_dir = os.path.join(self.config['ocr']['images_dir'], user['id'])
@@ -148,15 +210,84 @@ class MultiUserWatcher:
             
             while capture_count < max_captures:
                 try:
-                    # Wait for the video element to be visible
+                    # Wait for the video element to be visible with retry logic
                     canvas_selector = self.config['dashboard']['selectors']['canvas']
                     element = page.locator(canvas_selector)
                     
-                    # Check if element exists and is visible
-                    if await element.is_visible():
-                        # Take screenshot of the element
-                        screenshot_bytes = await element.screenshot(type='png')
-                        image = Image.open(BytesIO(screenshot_bytes))
+                    # Retry logic: check for element every 30 seconds
+                    max_retries = 10  # Retry up to 10 times (5 minutes total)
+                    element_found = False
+                    is_visible = False
+                    
+                    for retry_attempt in range(max_retries):
+                        element_exists = await element.count() > 0
+                        
+                        if element_exists:
+                            is_visible = await element.is_visible()
+                            if is_visible:
+                                element_found = True
+                                logger.info(f"✅ Canvas element found and visible (attempt {retry_attempt + 1})")
+                                break
+                            else:
+                                logger.info(f"⏳ Element exists but not visible yet (attempt {retry_attempt + 1}/{max_retries})")
+                        else:
+                            logger.warning(f"⚠️ Canvas element not found (attempt {retry_attempt + 1}/{max_retries})")
+                        
+                        if retry_attempt < max_retries - 1:
+                            logger.info(f"🔄 Retrying in 30 seconds...")
+                            await asyncio.sleep(30)
+                    
+                    if element_found and is_visible:
+                        # Capture the element using toDataURL method (following the sample pattern)
+                        canvas_data_url = None
+                        try:
+                            # First, inject html2canvas library if not already available
+                            await page.add_script_tag(url='https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js')
+                            await asyncio.sleep(1)  # Wait for library to load
+                            
+                            # Get the element by class name and convert to canvas using html2canvas
+                            canvas_data_url = await page.evaluate("""
+                                async () => {
+                                    const container = document.getElementsByClassName('pc-new-video-box')[0];
+                                    if (!container) return null;
+                                    
+                                    // Use html2canvas to convert div to canvas
+                                    if (typeof html2canvas !== 'undefined') {
+                                        try {
+                                            const canvas = await html2canvas(container, {
+                                                useCORS: true,
+                                                allowTaint: true,
+                                                scale: 1,
+                                                logging: false
+                                            });
+                                            return canvas.toDataURL('image/png');
+                                        } catch(e) {
+                                            console.error('html2canvas error:', e);
+                                            return null;
+                                        }
+                                    }
+                                    
+                                    return null;
+                                }
+                            """)
+                            
+                            if canvas_data_url:
+                                # Decode base64 image data
+                                base64_data = canvas_data_url.split(',')[1]
+                                image_data = base64.b64decode(base64_data)
+                                image = Image.open(BytesIO(image_data))
+                                logger.info(f"✅ Captured element using toDataURL (high quality)")
+                            else:
+                                # Fall back to screenshot if html2canvas failed
+                                logger.info(f"⚠️ html2canvas conversion failed, using screenshot fallback")
+                                screenshot_bytes = await element.screenshot(type='png')
+                                image = Image.open(BytesIO(screenshot_bytes))
+                                
+                        except Exception as capture_error:
+                            # Fall back to screenshot on any error
+                            logger.warning(f"⚠️ toDataURL capture failed ({capture_error}), using screenshot fallback")
+                            screenshot_bytes = await element.screenshot(type='png')
+                            image = Image.open(BytesIO(screenshot_bytes))
                         
                         # Save with timestamp and user ID
                         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -164,10 +295,9 @@ class MultiUserWatcher:
                         save_path = os.path.join(user_images_dir, filename)
                         image.save(save_path)
                         
-                        # Perform OCR - extract table data (10 values from Sub Total row)
                         table_data = ocr_image_google_vision_table(save_path)
                         
-                        # Send to WebSocket
+                        # Send to WebSocket (1x10 format - Sub Total row only, no zero replacement)
                         request_key = user.get('request_key', 'machine1')
                         await post_table_data(table_data, save_path, user_info=user, request_key=request_key)
                         
@@ -179,7 +309,8 @@ class MultiUserWatcher:
                             os.remove(save_path)
                             
                     else:
-                        logger.warning(f"⚠️ Video element not visible for {user['name']}")
+                        logger.warning(f"⚠️ Canvas element not found or not visible after {max_retries} attempts (5 minutes)")
+                        logger.info(f"🔄 Will retry in next capture cycle (interval: {interval}s)")
                         
                 except Exception as e:
                     logger.error(f"❌ Capture error for {user['name']}: {e}")
@@ -211,7 +342,7 @@ class MultiUserWatcher:
                 try:
                     # Login
                     login_success = await self.login_user(page, user)
-                    await page.wait_for_load_state('networkidle')
+                    await asyncio.sleep(3)  # Wait after login
                     # if not login_success:
                     #     logger.error(f"❌ Failed to login {user['name']}, skipping session")
                     #     return

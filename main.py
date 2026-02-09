@@ -22,12 +22,11 @@ async def main():
     
     # You can choose which mode to run
     # For single user mode:
-    # await core_main()
-    await watch_image_src()
+    # await watch_image_src()
     
-    # For multi-user mode:
-    # watcher = MultiUserWatcher("app/config/users.json")
-    # await watcher.run_all_users()
+    # For multi-user mode (Clevguard):
+    watcher = MultiUserWatcher("app/config/users.json")
+    await watcher.run_all_users()
     # watcher = MultiUserWatcherFixed("app/config/users.json")
     # await watcher.run_all_users()
 

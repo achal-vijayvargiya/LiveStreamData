@@ -4,7 +4,7 @@
       "id": "user1",
       "name": "Bazaarmain7",
       "username": "Bazaarmain7@gmail.com",
-      "password": "Khodal@111",
+      "password": "Khodal@1111111",
       "request_key": "machine1",
       "enabled": true,
       "capture_interval": 20,
@@ -19,12 +19,23 @@
       "username": "input[type=\"text\"][placeholder=\"Email Address\"]",
       "password": "input[type=\"password\"]",
       "login_button": "button.btn-login",
-      "canvas": ".pc-new-video-box"
+      "canvas": ".pc-new-video-box",
+      "play_button": ".play-btn"
     }
   },
   "websocket": {
     "endpoint": "ws://localhost:8765",
-    "timeout": 10
+    "timeout": 10,
+    "ngrok_endpoints": [
+      {
+        "url": "ws://1.tcp.in.ngrok.io:20264",
+        "enabled": true
+      },
+      {
+        "url": "ws://1.tcp.in.ngrok.io:20369",
+        "enabled": true
+      }
+    ]
   },
   "ocr": {
     "engine": "google_vision",

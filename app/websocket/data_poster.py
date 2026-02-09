@@ -19,6 +19,32 @@ try:
 except:
     HARDCODED_NUM1 = {}
 
+# Load config file for websocket endpoints
+CONFIG_FILE = "app/config/users.json"
+def load_config():
+    """Load configuration from JSON file"""
+    try:
+        with open(CONFIG_FILE, 'r') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        logger.error(f"❌ Configuration file {CONFIG_FILE} not found")
+        return {}
+    except json.JSONDecodeError as e:
+        logger.error(f"❌ Invalid JSON in configuration file: {e}")
+        return {}
+
+def get_enabled_ngrok_endpoints():
+    """Get list of enabled ngrok endpoints from config file"""
+    config = load_config()
+    endpoints = []
+    
+    if "websocket" in config and "ngrok_endpoints" in config["websocket"]:
+        for endpoint_config in config["websocket"]["ngrok_endpoints"]:
+            if endpoint_config.get("enabled", False):
+                endpoints.append(endpoint_config["url"])
+    
+    return endpoints
+
 # Global variable to store previous call data
 _previous_call_data = {}
 
@@ -76,10 +102,8 @@ def update_previous_call_data(current_data):
     _previous_call_data = current_data.copy()
     logger.info("💾 Updated previous call data")
 
-# WebSocket endpoint - can be local or ngrok
-NGROK_ENDPOINT = "ws://1.tcp.in.ngrok.io:20369"
-# "ws://localhost:8765"  # Default to local server
-# For ngrok: "ws://1.tcp.in.ngrok.io:20306"
+# WebSocket endpoints are now loaded from config file (users.json)
+# Use get_enabled_ngrok_endpoints() to get enabled endpoints
 
 async def post_data(detected, image_path=None, user_info=None):
     # print(f"detect:{detected}")
@@ -109,12 +133,13 @@ async def post_data(detected, image_path=None, user_info=None):
     # Update previous call data with current validated data
     update_previous_call_data(validated_output)
 
+
 async def send_post(self, data):
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 response = await client.post(
                     "https://be.khodalmaa.in/api/v1/project2_data",
-                    data=json.dumps({"machine1": data}),
+                    data=json.dumps({"machine4": data}),
                     headers={"Content-Type": "application/json"}
                 )
                 print("Status:", response.status_code)
@@ -147,37 +172,47 @@ async def post_table_data(table_data, image_path=None, user_info=None, request_k
     print("request: \n")
     print(json.dumps(output, indent=2), flush=True)
     
-    # Send data directly (no zero replacement)
+    # Send via WebSocket (no zero replacement)
     await _send_ws(output, request_key)
+    
+    # Also POST to API with machine4 key
+    await send_post(None, output)
 
-async def _send_ws(data,request_key:str):
-    try:
-        logger.info(f"🔗 Connecting to WebSocket server: {NGROK_ENDPOINT}")
-        async with websockets.connect(NGROK_ENDPOINT) as ws:
-            logger.info("✅ Connected to WebSocket server")
-            
-            # Prepare the message
-            message = {request_key: data}
-            json_message = json.dumps(message)
-            
-            # Send the message
-            await ws.send(json_message)
-            logger.info(f"📤 Sent data: {json_message}")
-            
-            # Try to receive a response to confirm success
-            try:
-                response = await ws.recv()
-                logger.info(f"📨 Received response: {response}")
-                return True
-            except Exception as recv_err:
-                logger.warning(f"⚠️ WebSocket sent but no response received: {recv_err}")
-                return False
-    except ConnectionRefusedError:
-        logger.error(f"❌ Connection refused. Is the server running on {NGROK_ENDPOINT}?")
+async def _send_ws(data, request_key: str):
+    """Send data to all enabled ngrok endpoints from config file."""
+    message = {request_key: data}
+    json_message = json.dumps(message)
+    
+    # Get enabled endpoints from config file
+    endpoints = get_enabled_ngrok_endpoints()
+    
+    if not endpoints:
+        logger.warning("⚠️ No enabled ngrok endpoints found in config file")
         return False
-    except Exception as e:
-        logger.error(f"❌ Error sending data via websocket: {e}")
-        return False
+
+    async def send_to_endpoint(endpoint: str):
+        try:
+            logger.info(f"🔗 Connecting to WebSocket server: {endpoint}")
+            async with websockets.connect(endpoint) as ws:
+                logger.info(f"✅ Connected to WebSocket server: {endpoint}")
+                await ws.send(json_message)
+                logger.info(f"📤 Sent data to {endpoint}: {json_message}")
+                try:
+                    response = await ws.recv()
+                    logger.info(f"📨 Received response from {endpoint}: {response}")
+                    return True
+                except Exception as recv_err:
+                    logger.warning(f"⚠️ WebSocket sent but no response received from {endpoint}: {recv_err}")
+                    return False
+        except ConnectionRefusedError:
+            logger.error(f"❌ Connection refused for {endpoint}")
+            return False
+        except Exception as e:
+            logger.error(f"❌ Error sending data via websocket to {endpoint}: {e}")
+            return False
+
+    results = await asyncio.gather(*[send_to_endpoint(ep) for ep in endpoints])
+    return any(results)
 
 # Test function to demonstrate usage
 async def test_websocket_connection():
