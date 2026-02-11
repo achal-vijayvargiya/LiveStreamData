@@ -143,6 +143,29 @@ class MultiUserWatcher:
             play_button_found = False
             
             for attempt in range(max_wait_attempts):
+                # Check for and hide dialog box if present
+                try:
+                    dialog_selector = '.dialog-content'
+                    dialog = page.locator(dialog_selector)
+                    dialog_count = await dialog.count()
+                    if dialog_count > 0:
+                        is_dialog_visible = await dialog.first.is_visible()
+                        if is_dialog_visible:
+                            logger.info(f"🔍 Dialog box found, hiding it... (attempt {attempt + 1}/{max_wait_attempts})")
+                            # Hide the dialog by setting display: none
+                            await page.evaluate(f"""
+                                () => {{
+                                    const dialog = document.querySelector('{dialog_selector}');
+                                    if (dialog) {{
+                                        dialog.style.display = 'none';
+                                    }}
+                                }}
+                            """)
+                            logger.info("✅ Dialog box hidden")
+                            await asyncio.sleep(2)  # Wait a moment after hiding dialog
+                except Exception as dialog_error:
+                    logger.debug(f"Dialog check: {dialog_error}")
+                
                 play_button = page.locator(play_button_selector)
                 play_button_count = await play_button.count()
                 
