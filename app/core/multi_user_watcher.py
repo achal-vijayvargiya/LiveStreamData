@@ -197,7 +197,7 @@ class MultiUserWatcher:
                 try:
                     logger.info("🔘 Clicking play button...")
                     await play_button.first.click()
-                    await asyncio.sleep(5)  # Wait for video/canvas to start
+                    await asyncio.sleep(2)  # Wait for video/canvas to start
                     logger.info("✅ Play button clicked, video should be starting")
                 except Exception as e:
                     logger.error(f"❌ Error clicking play button: {e}")
@@ -235,113 +235,109 @@ class MultiUserWatcher:
             
             capture_count = 0
             max_captures = user.get('max_captures', 2000)
-            interval = user.get('capture_interval', 20)
+            interval = user.get('capture_interval', 2)
+            
+            # Find the element ONCE before entering the capture loop (with retries)
+            canvas_selector = self.config['dashboard']['selectors']['canvas']
+            element = page.locator(canvas_selector)
+            element_found = False
+            max_retries = 10
+            for retry_attempt in range(max_retries):
+                if await element.count() > 0 and await element.first.is_visible():
+                    element_found = True
+                    logger.info(f"✅ Canvas element (.pc-new-video-box) found and visible (attempt {retry_attempt + 1})")
+                    break
+                logger.info(f"⏳ Waiting for canvas element... (attempt {retry_attempt + 1}/{max_retries})")
+                if retry_attempt < max_retries - 1:
+                    await asyncio.sleep(30)
+            
+            if not element_found:
+                logger.error("❌ Canvas element not found after all retries, aborting capture process")
+                return
+            
+            # Inject html2canvas ONCE before the capture loop
+            try:
+                await page.add_script_tag(url='https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js')
+                await asyncio.sleep(1)
+            except Exception as e:
+                logger.warning(f"⚠️ Could not load html2canvas: {e}, will use screenshot fallback")
             
             logger.info(f"🔄 Starting capture loop for {user['name']} (max: {max_captures}, interval: {interval}s)")
             
             while capture_count < max_captures:
                 try:
-                    # Wait for the video element to be visible with retry logic
-                    canvas_selector = self.config['dashboard']['selectors']['canvas']
+                    # Quick check: element should still be visible (no heavy retry per iteration)
                     element = page.locator(canvas_selector)
+                    if await element.count() == 0 or not await element.first.is_visible():
+                        logger.warning(f"⚠️ Canvas element not visible, waiting {interval}s before retry...")
+                        await asyncio.sleep(interval)
+                        continue
                     
-                    # Retry logic: check for element every 30 seconds
-                    max_retries = 10  # Retry up to 10 times (5 minutes total)
-                    element_found = False
-                    is_visible = False
-                    
-                    for retry_attempt in range(max_retries):
-                        element_exists = await element.count() > 0
-                        
-                        if element_exists:
-                            is_visible = await element.is_visible()
-                            if is_visible:
-                                element_found = True
-                                logger.info(f"✅ Canvas element found and visible (attempt {retry_attempt + 1})")
-                                break
-                            else:
-                                logger.info(f"⏳ Element exists but not visible yet (attempt {retry_attempt + 1}/{max_retries})")
-                        else:
-                            logger.warning(f"⚠️ Canvas element not found (attempt {retry_attempt + 1}/{max_retries})")
-                        
-                        if retry_attempt < max_retries - 1:
-                            logger.info(f"🔄 Retrying in 30 seconds...")
-                            await asyncio.sleep(30)
-                    
-                    if element_found and is_visible:
-                        # Capture the element using toDataURL method (following the sample pattern)
-                        canvas_data_url = None
-                        try:
-                            # First, inject html2canvas library if not already available
-                            await page.add_script_tag(url='https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js')
-                            await asyncio.sleep(1)  # Wait for library to load
-                            
-                            # Get the element by class name and convert to canvas using html2canvas
-                            canvas_data_url = await page.evaluate("""
-                                async () => {
-                                    const container = document.getElementsByClassName('pc-new-video-box')[0];
-                                    if (!container) return null;
-                                    
-                                    // Use html2canvas to convert div to canvas
-                                    if (typeof html2canvas !== 'undefined') {
-                                        try {
-                                            const canvas = await html2canvas(container, {
-                                                useCORS: true,
-                                                allowTaint: true,
-                                                scale: 1,
-                                                logging: false
-                                            });
-                                            return canvas.toDataURL('image/png');
-                                        } catch(e) {
-                                            console.error('html2canvas error:', e);
-                                            return null;
-                                        }
-                                    }
-                                    
-                                    return null;
-                                }
-                            """)
-                            
-                            if canvas_data_url:
-                                # Decode base64 image data
-                                base64_data = canvas_data_url.split(',')[1]
-                                image_data = base64.b64decode(base64_data)
-                                image = Image.open(BytesIO(image_data))
-                                logger.info(f"✅ Captured element using toDataURL (high quality)")
-                            else:
-                                # Fall back to screenshot if html2canvas failed
-                                logger.info(f"⚠️ html2canvas conversion failed, using screenshot fallback")
-                                screenshot_bytes = await element.screenshot(type='png')
-                                image = Image.open(BytesIO(screenshot_bytes))
+                    # Capture the element using toDataURL method (following the sample pattern)
+                    canvas_data_url = None
+                    try:
+                        # html2canvas was injected before the loop - get element and convert to image
+                        canvas_data_url = await page.evaluate("""
+                            async () => {
+                                const container = document.getElementsByClassName('pc-new-video-box')[0];
+                                if (!container) return null;
                                 
-                        except Exception as capture_error:
-                            # Fall back to screenshot on any error
-                            logger.warning(f"⚠️ toDataURL capture failed ({capture_error}), using screenshot fallback")
+                                // Use html2canvas to convert div to canvas
+                                if (typeof html2canvas !== 'undefined') {
+                                    try {
+                                        const canvas = await html2canvas(container, {
+                                            useCORS: true,
+                                            allowTaint: true,
+                                            scale: 1,
+                                            logging: false
+                                        });
+                                        return canvas.toDataURL('image/png');
+                                    } catch(e) {
+                                        console.error('html2canvas error:', e);
+                                        return null;
+                                    }
+                                }
+                                
+                                return null;
+                            }
+                        """)
+                        
+                        if canvas_data_url:
+                            # Decode base64 image data
+                            base64_data = canvas_data_url.split(',')[1]
+                            image_data = base64.b64decode(base64_data)
+                            image = Image.open(BytesIO(image_data))
+                            logger.info(f"✅ Captured element using toDataURL (high quality)")
+                        else:
+                            # Fall back to screenshot if html2canvas failed
+                            logger.info(f"⚠️ html2canvas conversion failed, using screenshot fallback")
                             screenshot_bytes = await element.screenshot(type='png')
                             image = Image.open(BytesIO(screenshot_bytes))
-                        
-                        # Save with timestamp and user ID
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-                        filename = f"canvas_capture_{user['id']}_{timestamp}.png"
-                        save_path = os.path.join(user_images_dir, filename)
-                        image.save(save_path)
-                        
-                        table_data = ocr_image_google_vision_table(save_path)
-                        
-                        # Send to WebSocket (1x10 format - Sub Total row only, no zero replacement)
-                        request_key = user.get('request_key', 'machine1')
-                        await post_table_data(table_data, save_path, user_info=user, request_key=request_key)
-                        
-                        capture_count += 1
-                        logger.info(f"📊 {user['name']}: Capture #{capture_count}, OCR completed")
-                        
-                        # Clean up image if not saving
-                        if not self.config['ocr']['save_images']:
-                            os.remove(save_path)
                             
-                    else:
-                        logger.warning(f"⚠️ Canvas element not found or not visible after {max_retries} attempts (5 minutes)")
-                        logger.info(f"🔄 Will retry in next capture cycle (interval: {interval}s)")
+                    except Exception as capture_error:
+                        # Fall back to screenshot on any error
+                        logger.warning(f"⚠️ toDataURL capture failed ({capture_error}), using screenshot fallback")
+                        screenshot_bytes = await element.screenshot(type='png')
+                        image = Image.open(BytesIO(screenshot_bytes))
+                    
+                    # Save with timestamp and user ID
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                    filename = f"canvas_capture_{user['id']}_{timestamp}.png"
+                    save_path = os.path.join(user_images_dir, filename)
+                    image.save(save_path)
+                    
+                    table_data = ocr_image_google_vision_table(save_path)
+                    
+                    # Send to WebSocket (1x10 format - Sub Total row only, no zero replacement)
+                    request_key = user.get('request_key', 'machine1')
+                    await post_table_data(table_data, save_path, user_info=user, request_key=request_key)
+                    
+                    capture_count += 1
+                    logger.info(f"📊 {user['name']}: Capture #{capture_count}, OCR completed")
+                    
+                    # Clean up image if not saving
+                    if not self.config['ocr']['save_images']:
+                        os.remove(save_path)
                         
                 except Exception as e:
                     logger.error(f"❌ Capture error for {user['name']}: {e}")
