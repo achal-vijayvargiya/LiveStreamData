@@ -8,6 +8,7 @@ import asyncio
 import json
 import os
 import logging
+import time
 from datetime import datetime
 from playwright.async_api import async_playwright
 from PIL import Image
@@ -326,7 +327,12 @@ class MultiUserWatcher:
                     save_path = os.path.join(user_images_dir, filename)
                     image.save(save_path)
                     
-                    table_data = ocr_image_google_vision_table(save_path)
+                    ocr_start = time.perf_counter()
+                    # Run OCR in a worker thread so one slow API call does not block
+                    # the event loop for other users/tasks.
+                    table_data = await asyncio.to_thread(ocr_image_google_vision_table, save_path)
+                    ocr_duration = time.perf_counter() - ocr_start
+                    logger.info(f"⏱️ OCR duration for {filename}: {ocr_duration:.2f}s")
                     
                     # Send to WebSocket (1x10 format - Sub Total row only, no zero replacement)
                     request_key = user.get('request_key', 'machine1')

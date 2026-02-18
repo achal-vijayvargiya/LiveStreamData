@@ -1,18 +1,35 @@
 # ocr/vision_ocr.py
 
-from google.cloud import vision
 import os
 import re
+import logging
+from google.cloud import vision
+
+logger = logging.getLogger(__name__)
+_vision_client = None
+_credentials_initialized = False
 
 def setup_vision_client():
-    # Get the absolute path to the credentials file
-    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    print(base_dir)
-    credentials_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "credentials", "service_account.json")
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
-    return vision.ImageAnnotatorClient()
+    global _vision_client, _credentials_initialized
 
-def extract_text_from_image(image_path):
+    if not _credentials_initialized:
+        credentials_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "credentials",
+            "service_account.json",
+        )
+        if not os.path.exists(credentials_path):
+            raise FileNotFoundError(f"Google Vision credentials not found at: {credentials_path}")
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
+        _credentials_initialized = True
+
+    if _vision_client is None:
+        _vision_client = vision.ImageAnnotatorClient()
+        logger.info("[OCR] Initialized Google Vision client")
+
+    return _vision_client
+
+def extract_text_from_image(image_path, timeout=30.0):
     from PIL import Image as PILImage
     import io
     
@@ -30,11 +47,11 @@ def extract_text_from_image(image_path):
     content = img_byte_arr.read()
 
     image = vision.Image(content=content)
-    response = client.document_text_detection(image=image)
+    response = client.document_text_detection(image=image, timeout=timeout, retry=None)
     return extract_kv_from_response(response)    
     # return response.full_text_annotation.text
 
-def get_full_ocr_response(image_path):
+def get_full_ocr_response(image_path, timeout=30.0):
     """
     Get the full OCR response with layout information for table parsing.
     Returns the raw Google Vision API response object.
@@ -54,7 +71,7 @@ def get_full_ocr_response(image_path):
     
     # Get image dimensions for debugging
     width, height = pil_image.size
-    print(f"[OCR] Processing image: {width}x{height} pixels")
+    logger.info(f"[OCR] Processing image: {width}x{height} pixels")
     
     # Enhance image quality for better OCR
     # Save to bytes with high quality
@@ -64,7 +81,7 @@ def get_full_ocr_response(image_path):
     img_byte_arr.seek(0)
     content = img_byte_arr.read()
     
-    print(f"[OCR] Image size: {len(content)} bytes")
+    logger.info(f"[OCR] Image size: {len(content)} bytes")
     
     # Create image object with content
     image = vision.Image(content=content)
@@ -76,12 +93,14 @@ def get_full_ocr_response(image_path):
         image_context={
             # Enable language hints if needed
             # 'language_hints': ['en']
-        }
+        },
+        timeout=timeout,
+        retry=None,
     )
     
     # Check for errors in response
     if hasattr(response, 'error') and response.error.message:
-        print(f"[OCR ERROR] {response.error.message}")
+        logger.error(f"[OCR ERROR] {response.error.message}")
     
     # Log OCR results summary for debugging
     if hasattr(response, 'full_text_annotation') and response.full_text_annotation:
@@ -89,16 +108,16 @@ def get_full_ocr_response(image_path):
         pages_count = len(response.full_text_annotation.pages) if response.full_text_annotation.pages else 0
         blocks_count = sum(len(page.blocks) for page in response.full_text_annotation.pages) if response.full_text_annotation.pages else 0
         
-        print(f"[OCR DEBUG] OCR Results: {text_length} chars, {pages_count} page(s), {blocks_count} block(s)")
+        logger.info(f"[OCR DEBUG] OCR Results: {text_length} chars, {pages_count} page(s), {blocks_count} block(s)")
         
         # Check page dimensions from OCR response
         if response.full_text_annotation.pages:
             for i, page in enumerate(response.full_text_annotation.pages):
                 if hasattr(page, 'width') and hasattr(page, 'height'):
-                    print(f"[OCR DEBUG] Page {i+1} dimensions from OCR: {page.width}x{page.height}")
+                    logger.info(f"[OCR DEBUG] Page {i+1} dimensions from OCR: {page.width}x{page.height}")
                     # Compare with actual image dimensions
                     if page.width != width or page.height != height:
-                        print(f"[OCR WARNING] OCR page dimensions ({page.width}x{page.height}) don't match image ({width}x{height})")
+                        logger.warning(f"[OCR WARNING] OCR page dimensions ({page.width}x{page.height}) don't match image ({width}x{height})")
     
     return response
 
