@@ -139,7 +139,7 @@ async def send_post(self, data):
             async with httpx.AsyncClient(timeout=10) as client:
                 response = await client.post(
                     "https://be.khodalmaa.in/api/v1/project2_data",
-                    data=json.dumps({"machine4": data}),
+                    data=json.dumps({"machine1": data}),
                     headers={"Content-Type": "application/json"}
                 )
                 print("Status:", response.status_code)

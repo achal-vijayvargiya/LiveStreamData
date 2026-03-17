@@ -14,8 +14,8 @@ from playwright.async_api import async_playwright
 from PIL import Image
 from io import BytesIO
 import base64
-from ..ocr.engine import ocr_image_google_vision_table
-from ..websocket.data_poster import post_table_data
+from ..ocr.engine import ocr_image_google_vision
+from ..websocket.data_poster import post_data
 
 # Configure logging
 logging.basicConfig(
@@ -250,7 +250,7 @@ class MultiUserWatcher:
                     break
                 logger.info(f"⏳ Waiting for canvas element... (attempt {retry_attempt + 1}/{max_retries})")
                 if retry_attempt < max_retries - 1:
-                    await asyncio.sleep(30)
+                    await asyncio.sleep(15)
             
             if not element_found:
                 logger.error("❌ Canvas element not found after all retries, aborting capture process")
@@ -330,13 +330,13 @@ class MultiUserWatcher:
                     ocr_start = time.perf_counter()
                     # Run OCR in a worker thread so one slow API call does not block
                     # the event loop for other users/tasks.
-                    table_data = await asyncio.to_thread(ocr_image_google_vision_table, save_path)
+                    table_data = await asyncio.to_thread(ocr_image_google_vision, save_path)
                     ocr_duration = time.perf_counter() - ocr_start
                     logger.info(f"⏱️ OCR duration for {filename}: {ocr_duration:.2f}s")
                     
                     # Send to WebSocket (1x10 format - Sub Total row only, no zero replacement)
                     request_key = user.get('request_key', 'machine1')
-                    await post_table_data(table_data, save_path, user_info=user, request_key=request_key)
+                    await post_data(table_data, save_path, user_info=user)
                     
                     capture_count += 1
                     logger.info(f"📊 {user['name']}: Capture #{capture_count}, OCR completed")
@@ -355,6 +355,115 @@ class MultiUserWatcher:
         except Exception as e:
             logger.error(f"❌ Fatal error in capture process for {user['name']}: {e}")
     
+    async def capture_via_intercept(self, page, user):
+        """Capture images by intercepting living-screenshot network responses instead of screenshotting."""
+        try:
+            logger.info(f"🔗 [INTERCEPT] Starting network intercept capture for {user['name']}")
+
+            user_images_dir = os.path.join(self.config['ocr']['images_dir'], user['id'])
+            if not os.path.exists(user_images_dir):
+                os.makedirs(user_images_dir)
+
+            capture_count = 0
+            max_captures = user.get('max_captures', 2000)
+            interval = user.get('capture_interval', 2)
+            image_queue = asyncio.Queue()
+
+            async def on_response(response):
+                """Listener that catches living-screenshot responses and queues them."""
+                try:
+                    if "living-screenshot" in response.url and response.status == 200:
+                        content_type = response.headers.get("content-type", "")
+                        body = await response.body()
+                        if not body:
+                            return
+                        if "image" in content_type:
+                            await image_queue.put(body)
+                        elif "json" in content_type:
+                            data = json.loads(body)
+                            img_b64 = data.get("data") or data.get("image") or data.get("screenshot")
+                            if img_b64:
+                                if "," in img_b64:
+                                    img_b64 = img_b64.split(",", 1)[1]
+                                await image_queue.put(base64.b64decode(img_b64))
+                        else:
+                            await image_queue.put(body)
+                except Exception as e:
+                    logger.debug(f"[INTERCEPT] Skipped response {response.url}: {e}")
+
+            page.on("response", on_response)
+
+            logger.info(f"🌐 [INTERCEPT] Navigating to live view page...")
+            await page.goto(self.config['dashboard']['live_view_url'], wait_until='domcontentloaded', timeout=0)
+            await asyncio.sleep(5)
+
+            # Hide dialogs if present (same as original)
+            dialog_selectors = ['.dialog-content', '.mask.global-guide-dialog', '.dialog.guide-first']
+            for dialog_selector in dialog_selectors:
+                try:
+                    dialog = page.locator(dialog_selector)
+                    if await dialog.count() > 0 and await dialog.first.is_visible():
+                        await page.evaluate(f"""() => {{
+                            const d = document.querySelector('{dialog_selector}');
+                            if (d) d.style.display = 'none';
+                        }}""")
+                except Exception:
+                    pass
+
+            # Click play button if present
+            play_button_selector = self.config['dashboard']['selectors'].get('play_button', '.play-btn')
+            for attempt in range(12):
+                try:
+                    play_button = page.locator(play_button_selector)
+                    if await play_button.count() > 0 and await play_button.first.is_visible():
+                        logger.info(f"🔘 [INTERCEPT] Clicking play button...")
+                        await play_button.first.click()
+                        await asyncio.sleep(2)
+                        break
+                except Exception:
+                    pass
+                await asyncio.sleep(5)
+
+            logger.info(f"🔄 [INTERCEPT] Listening for living-screenshot responses for {user['name']} "
+                         f"(max: {max_captures}, interval: {interval}s)")
+
+            while capture_count < max_captures:
+                try:
+                    image_bytes = await asyncio.wait_for(image_queue.get(), timeout=interval + 30)
+                except asyncio.TimeoutError:
+                    logger.warning(f"⚠️ [INTERCEPT] No living-screenshot received in {interval + 30}s, "
+                                    f"still waiting...")
+                    continue
+
+                try:
+                    image = Image.open(BytesIO(image_bytes))
+
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                    filename = f"intercept_capture_{user['id']}_{timestamp}.png"
+                    save_path = os.path.join(user_images_dir, filename)
+                    image.save(save_path)
+
+                    ocr_start = time.perf_counter()
+                    table_data = await asyncio.to_thread(ocr_image_google_vision, save_path)
+                    ocr_duration = time.perf_counter() - ocr_start
+                    logger.info(f"⏱️ [INTERCEPT] OCR duration for {filename}: {ocr_duration:.2f}s")
+
+                    await post_data(table_data, save_path, user_info=user)
+
+                    capture_count += 1
+                    logger.info(f"📊 [INTERCEPT] {user['name']}: Capture #{capture_count}, OCR completed")
+
+                    if not self.config['ocr']['save_images']:
+                        os.remove(save_path)
+
+                except Exception as e:
+                    logger.error(f"❌ [INTERCEPT] Processing error for {user['name']}: {e}")
+
+                await asyncio.sleep(interval)
+
+        except Exception as e:
+            logger.error(f"❌ [INTERCEPT] Fatal error for {user['name']}: {e}")
+
     async def run_user(self, user, user_index):
         """Run a complete session for one user with persistent browser context"""
         user_data_dir = self.get_user_data_dir(user_index)
@@ -380,8 +489,14 @@ class MultiUserWatcher:
                     #     logger.error(f"❌ Failed to login {user['name']}, skipping session")
                     #     return
                     
-                    # Start capture process
-                    await self.capture_and_process(page, user)
+                    # Start capture process (choose method from config)
+                    capture_method = self.config.get('dashboard', {}).get('capture_method', 'screenshot')
+                    if capture_method == 'intercept':
+                        logger.info(f"📡 Using network intercept capture for {user['name']}")
+                        await self.capture_via_intercept(page, user)
+                    else:
+                        logger.info(f"📸 Using screenshot capture for {user['name']}")
+                        await self.capture_and_process(page, user)
                     
                 finally:
                     # Ensure we always close the context properly

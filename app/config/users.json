@@ -3,8 +3,8 @@
     {
       "id": "user1",
       "name": "Bazaarmain7",
-      "username": "Bazaarmain7@gmail.com",
-      "password": "Khodal@1111111",
+      "username": "Mainbazaar788@gmail.com",
+      "password": "Khodal@111",
       "request_key": "machine1",
       "enabled": true,
       "capture_interval": 20,
@@ -13,6 +13,7 @@
    
   ],
   "dashboard": {
+    "capture_method": "intercept",
     "login_url": "https://account.clevguard.org/login",
     "live_view_url": "https://panel.clevguard.org/monivisor-live-screen",
     "selectors": {
